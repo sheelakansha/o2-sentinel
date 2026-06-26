@@ -4,17 +4,6 @@ O₂ Sentinel is an advanced, production-grade environmental telemetry monitorin
 
 The system collects real-time chamber telemetry logs (Oxygen concentration, Temperature, and Humidity), runs an alert deduplication state machine, calculates dynamic trend forecasts using least-squares linear regression, and displays prioritized safety action recommendations to control room operators.
 
----
-
-## 📸 Screenshots
-
-### Tactical Control Room HUD
-Below is the visual interface design of the **O₂ Sentinel** tactical dashboard, featuring glassmorphism cards, glowing status sweeps, real-time SVG charts, prediction projections, and active safety recommendations.
-
-![O2 Sentinel Tactical Dashboard HUD](docs/screenshots/dashboard.png)
-
----
-
 ## 🗺️ System Architecture
 
 The project conforms to a decoupled **Model-View-Controller (MVC)** architecture matching DRDO production guidelines:
