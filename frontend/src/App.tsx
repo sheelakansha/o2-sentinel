@@ -75,7 +75,7 @@ export default function App() {
   }, [oxygen, temperature, humidity]);
 
   // Determine individual status flags
-  const getOxygenStatus = () => {
+  const getOxygenStatus = (): 'normal' | 'warning' | 'danger' => {
     if (oxygen >= 19.5 && oxygen <= 23.5) return 'normal';
     return 'danger';
   };
