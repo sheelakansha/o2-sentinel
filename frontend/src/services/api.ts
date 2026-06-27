@@ -1,4 +1,4 @@
-const API = "http://localhost:5000";
+const API = "https://o2-sentinel-frontend.onrender.com";
 
 const unwrap = async (res: Response) => {
   const json = await res.json();
@@ -64,4 +64,4 @@ export const getSystemEvents = async () => {
   const res = await fetch(`${API}/api/system/events`);
   return await unwrap(res);
 };
-
+
