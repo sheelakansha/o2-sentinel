@@ -55,7 +55,6 @@ export default function Loader({ onComplete }: LoaderProps) {
         </div>
         
         <h1 className="loader-title">O₂ SENTINEL</h1>
-        <p className="loader-subtitle">DRDO LIFE SUPPORT TELEMETRY</p>
         
         <div className="loader-progress-track">
           <div className="loader-progress-bar" style={{ width: `${progress}%` }}></div>

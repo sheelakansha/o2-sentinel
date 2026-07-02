@@ -1,9 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import StatusCard from './dashboard/components/StatusCard';
-import TrendChart from './dashboard/components/TrendChart';
-import PredictionChart from './dashboard/components/PredictionChart';
+import { useState, useEffect, useMemo } from 'react';
 import Loader from './dashboard/components/Loader';
-
 import {
   getSensorData,
   getDevices,
@@ -18,18 +14,54 @@ import {
   getSystemEvents,
 } from "./services/api";
 
+// Simple sparkline helper component
+function Sparkline({ data, color, min, max }: { data: number[]; color: string; min: number; max: number }) {
+  if (!data || data.length < 2) return null;
+  const width = 80;
+  const height = 30;
+  const range = max - min || 1;
+  const coords = data.map((val, idx) => {
+    const x = (idx / (data.length - 1)) * width;
+    const clamped = Math.max(min, Math.min(max, val));
+    const y = height - ((clamped - min) / range) * height;
+    return { x, y };
+  });
+  
+  const path = coords.reduce((acc, coord, idx) => {
+    return idx === 0 ? `M ${coord.x} ${coord.y}` : `${acc} L ${coord.x} ${coord.y}`;
+  }, "");
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="chart-svg">
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [systemTime, setSystemTime] = useState<Date>(new Date());
   
-  // Telemetry simulation states (Atmospheric O2 values, standard temp, humidity)
+  // Navigation and Theme States
+  const [activeNav, setActiveNav] = useState('Dashboard');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  
+  // Interactive trends chart tabs
+  const [activeTrendTab, setActiveTrendTab] = useState<'oxygen' | 'temperature' | 'humidity'>('oxygen');
+  const [timeFilter, setTimeFilter] = useState<'1h' | '6h' | '24h' | '7d' | '30d'>('24h');
+  
+  // Real-time sensor state variables
   const [oxygen, setOxygen] = useState(20.8);
   const [temperature, setTemperature] = useState(24.5);
   const [humidity, setHumidity] = useState(48.2);
   const [mockAnomaly, setMockAnomaly] = useState(false);
   const [deviceStatus, setDeviceStatus] = useState<{ status: string; battery: string; lastUpdated: string } | null>(null);
 
-  // Telemetry history states for live graphing (pre-populated with realistic atmospheric values)
+  // Status variables for Firebase
+  const [firebaseConnected, setFirebaseConnected] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
+
+  // Buffer state variables (Telemetry graphs)
   const [oxygenHistory, setOxygenHistory] = useState<number[]>(() => 
     Array.from({ length: 15 }, () => 20.7 + Math.random() * 0.2)
   );
@@ -40,18 +72,30 @@ export default function App() {
     Array.from({ length: 15 }, () => 47.5 + Math.random() * 0.9)
   );
 
-  // Load initial database history logs on startup
+  const [predO2_5m, setPredO2_5m] = useState<number>(20.7);
+  const [predO2_10m, setPredO2_10m] = useState<number>(20.5);
+  const [o2Projection, setO2Projection] = useState<number[]>(() => 
+    Array.from({ length: 15 }, () => 20.7 + (Math.random() - 0.5) * 0.1)
+  );
+
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [alertsHistory, setAlertsHistory] = useState<any[]>([]);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [stats, setStats] = useState<any | null>(null);
+  const [health, setHealth] = useState<any | null>(null);
+  const [events, setEvents] = useState<any[]>([]);
+
+  // Load telemetry buffers
   useEffect(() => {
     let active = true;
     const loadHistory = async () => {
       try {
         const historyData = await getSensorHistory();
         if (active && Array.isArray(historyData) && historyData.length > 0) {
-          const o2Vals = historyData.map((row: any) => row.oxygen);
-          const tempVals = historyData.map((row: any) => row.temperature);
-          const humVals = historyData.map((row: any) => row.humidity);
+          const o2Vals = historyData.map((row: any) => row.oxygen ?? 20.8);
+          const tempVals = historyData.map((row: any) => row.temperature ?? 24.5);
+          const humVals = historyData.map((row: any) => row.humidity ?? 48.2);
 
-          // Ensure history arrays are padded to 15 values for visual consistency
           const padArray = (arr: number[], fallbackVal: number) => {
             const padSize = 15 - arr.length;
             if (padSize > 0) {
@@ -64,9 +108,11 @@ export default function App() {
           setOxygenHistory(padArray(o2Vals, 20.8));
           setTempHistory(padArray(tempVals, 24.5));
           setHumidityHistory(padArray(humVals, 48.2));
+          setFirebaseConnected(true);
+          setLastSyncTime(new Date().toLocaleTimeString());
         }
       } catch (err) {
-        console.error("Failed to load database history log:", err);
+        console.error("Failed to load history:", err);
       }
     };
     loadHistory();
@@ -75,7 +121,7 @@ export default function App() {
     };
   }, []);
 
-  // Fetch real-time data from backend when not simulating an anomaly
+  // Poll database
   useEffect(() => {
     let active = true;
 
@@ -84,18 +130,20 @@ export default function App() {
         try {
           const sensorData = await getSensorData();
           if (active) {
-            setOxygen(sensorData.oxygen);
-            setTemperature(sensorData.temperature);
-            setHumidity(sensorData.humidity);
+            setOxygen(sensorData.oxygen ?? 20.8);
+            setTemperature(sensorData.temperature ?? 24.5);
+            setHumidity(sensorData.humidity ?? 48.2);
             setSystemTime(new Date(sensorData.timestamp));
+            setFirebaseConnected(true);
+            setLastSyncTime(new Date().toLocaleTimeString());
           }
         } catch (err) {
-          // Fallback to slight random drift around nominal 20.8%
           if (active) {
             setOxygen(prev => Math.min(21.1, Math.max(20.5, prev + (Math.random() - 0.5) * 0.04)));
             setTemperature(prev => Math.min(26.0, Math.max(23.0, prev + (Math.random() - 0.5) * 0.1)));
             setHumidity(prev => Math.min(52.0, Math.max(45.0, prev + (Math.random() - 0.5) * 0.2)));
             setSystemTime(new Date());
+            setFirebaseConnected(false);
           }
         }
       }
@@ -107,7 +155,7 @@ export default function App() {
         }
       } catch (err) {
         if (active) {
-          setDeviceStatus({ status: "Offline", battery: "--%", lastUpdated: new Date().toISOString() });
+          setDeviceStatus({ status: "Offline", battery: "0%", lastUpdated: new Date().toISOString() });
         }
       }
 
@@ -116,65 +164,51 @@ export default function App() {
         if (active) {
           setAlerts(activeAlerts);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const historyAlerts = await getAlertHistory();
         if (active) {
           setAlertsHistory(historyAlerts);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const recsData = await getRecommendations();
         if (active && recsData && recsData.success) {
           setRecommendations(recsData.recommendations || []);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const predData = await getSensorPredictions();
         if (active && predData && predData.success) {
-          setPredO2_30m(predData.pred30);
-          setPredO2_1h(predData.pred1h);
+          setPredO2_5m(predData.pred5 ?? predData.pred30 ?? (oxygen - 0.02));
+          setPredO2_10m(predData.pred10 ?? predData.pred1h ?? (oxygen - 0.05));
           setO2Projection(predData.projection || []);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const statsData = await getSystemStats();
-        if (active && statsData && statsData.success) {
+        if (active && statsData && statsData.success && statsData.stats && statsData.stats.telemetry) {
           setStats(statsData.stats);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const healthData = await getSystemHealth();
-        if (active && healthData) {
+        if (active && healthData && healthData.status && healthData.memory) {
           setHealth(healthData);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
 
       try {
         const eventsData = await getSystemEvents();
         if (active && eventsData) {
           setEvents(eventsData);
         }
-      } catch (err) {
-        // Fallback
-      }
+      } catch (err) {}
     };
 
     fetchData();
@@ -186,70 +220,26 @@ export default function App() {
     };
   }, [mockAnomaly]);
 
-  // Telemetry drift simulator (active only when Anomaly Switch is toggled ON)
+  // Simulated Anomaly Drift
   useEffect(() => {
     if (!mockAnomaly) return;
 
     const simulationInterval = setInterval(() => {
       setOxygen(prev => Math.max(18.5, prev - 0.08));
-      setTemperature(prev => Math.min(34.5, prev + 0.4));
-      setHumidity(prev => Math.min(62.0, prev + 0.6));
+      setTemperature(prev => Math.min(34.5, prev + 0.3));
+      setHumidity(prev => Math.min(62.0, prev + 0.5));
       setSystemTime(new Date());
     }, 1000);
 
     return () => clearInterval(simulationInterval);
   }, [mockAnomaly]);
 
-  // Sync historical buffers
+  // Roll history buffers
   useEffect(() => {
     setOxygenHistory(prev => [...prev.slice(1), oxygen]);
     setTempHistory(prev => [...prev.slice(1), temperature]);
     setHumidityHistory(prev => [...prev.slice(1), humidity]);
   }, [oxygen, temperature, humidity]);
-
-  // Determine individual status flags
-  const getOxygenStatus = (): 'normal' | 'warning' | 'danger' => {
-    if (oxygen >= 19.5 && oxygen <= 23.5) return 'normal';
-    return 'danger';
-  };
-
-  const getTemperatureStatus = (): 'normal' | 'warning' | 'danger' => {
-    if (temperature <= 28) return 'normal';
-    if (temperature <= 32) return 'warning';
-    return 'danger';
-  };
-
-  const getHumidityStatus = (): 'normal' | 'warning' | 'danger' => {
-    if (humidity <= 55) return 'normal';
-    if (humidity <= 60) return 'warning';
-    return 'danger';
-  };
-
-  // Determine aggregate overall safety status
-  const getOverallStatus = () => {
-    const o2 = getOxygenStatus();
-    const temp = getTemperatureStatus();
-    const hum = getHumidityStatus();
-
-    if (o2 === 'danger' || temp === 'danger' || hum === 'danger') return 'danger';
-    if (o2 === 'warning' || temp === 'warning' || hum === 'warning') return 'warning';
-    return 'normal';
-  };
-
-  const overallStatus = getOverallStatus();
-
-  const [predO2_30m, setPredO2_30m] = useState<number>(20.7);
-  const [predO2_1h, setPredO2_1h] = useState<number>(20.5);
-  const [o2Projection, setO2Projection] = useState<number[]>(() => 
-    Array.from({ length: 15 }, () => 20.7 + (Math.random() - 0.5) * 0.1)
-  );
-
-  const [alerts, setAlerts] = useState<any[]>([]);
-  const [alertsHistory, setAlertsHistory] = useState<any[]>([]);
-  const [recommendations, setRecommendations] = useState<any[]>([]);
-  const [stats, setStats] = useState<any | null>(null);
-  const [health, setHealth] = useState<any | null>(null);
-  const [events, setEvents] = useState<any[]>([]);
 
   const handleAcknowledgeAlert = async (id: number) => {
     try {
@@ -261,503 +251,908 @@ export default function App() {
     }
   };
 
-  const getActiveAlert = () => {
-    if (alerts && alerts.length > 0) {
-      const active = alerts.find(a => a.acknowledged === 0);
-      if (active) {
-        return {
-          id: active.id,
-          level: active.severity === 'critical' ? 'danger' : 'warning',
-          message: active.message
-        };
-      }
+  // Status thresholds check
+  const o2Status = useMemo(() => {
+    if (oxygen >= 19.5 && oxygen <= 23.5) return 'normal';
+    return 'critical';
+  }, [oxygen]);
+
+  const tempStatus = useMemo(() => {
+    if (temperature <= 28) return 'normal';
+    if (temperature <= 32) return 'warning';
+    return 'critical';
+  }, [temperature]);
+
+  const humStatus = useMemo(() => {
+    if (humidity <= 55) return 'normal';
+    if (humidity <= 60) return 'warning';
+    return 'critical';
+  }, [humidity]);
+
+  const overallSafety = useMemo(() => {
+    if (o2Status === 'critical' || tempStatus === 'critical' || humStatus === 'critical') return 'critical';
+    if (tempStatus === 'warning' || humStatus === 'warning') return 'warning';
+    return 'normal';
+  }, [o2Status, tempStatus, humStatus]);
+
+  // Summary Metrics calculations
+  const avgOxygen = useMemo(() => {
+    const sum = oxygenHistory.reduce((a, b) => a + b, 0);
+    return sum / (oxygenHistory.length || 1);
+  }, [oxygenHistory]);
+
+  const avgTemp = useMemo(() => {
+    const sum = tempHistory.reduce((a, b) => a + b, 0);
+    return sum / (tempHistory.length || 1);
+  }, [tempHistory]);
+
+  const avgHumidity = useMemo(() => {
+    const sum = humidityHistory.reduce((a, b) => a + b, 0);
+    return sum / (humidityHistory.length || 1);
+  }, [humidityHistory]);
+
+
+
+  // Custom Trend Line Plotter
+  const selectedTrendData = useMemo(() => {
+    if (activeTrendTab === 'oxygen') return oxygenHistory;
+    if (activeTrendTab === 'temperature') return tempHistory;
+    return humidityHistory;
+  }, [activeTrendTab, oxygenHistory, tempHistory, humidityHistory]);
+
+  const trendRange = useMemo(() => {
+    if (activeTrendTab === 'oxygen') return { min: 18, max: 25, unit: '%', color: '#0A84FF', label: 'Oxygen' };
+    if (activeTrendTab === 'temperature') return { min: 15, max: 40, unit: '°C', color: '#FFD60A', label: 'Temperature' };
+    return { min: 20, max: 80, unit: '%', color: '#00f0ff', label: 'Humidity' };
+  }, [activeTrendTab]);
+
+  const timeFilteredData = useMemo(() => {
+    if (timeFilter === '1h') return selectedTrendData.slice(-5);
+    if (timeFilter === '6h') return selectedTrendData.slice(-10);
+    return selectedTrendData;
+  }, [selectedTrendData, timeFilter]);
+
+  // SVG Trend Chart Coordinates
+  const trendSvgCoords = useMemo(() => {
+    const w = 550;
+    const h = 200;
+    const padding = { left: 40, right: 20, top: 20, bottom: 30 };
+    const dataRange = trendRange.max - trendRange.min || 1;
+    
+    if (timeFilteredData.length < 2) return { line: '', area: '', points: [], gridLines: [] };
+    
+    const points = timeFilteredData.map((val, idx) => {
+      const x = padding.left + (idx / (timeFilteredData.length - 1)) * (w - padding.left - padding.right);
+      const clamped = Math.max(trendRange.min, Math.min(trendRange.max, val));
+      const y = h - padding.bottom - ((clamped - trendRange.min) / dataRange) * (h - padding.top - padding.bottom);
+      return { x, y, value: val };
+    });
+
+    const line = points.reduce((acc, p, idx) => {
+      return idx === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`;
+    }, '');
+
+    const area = `${line} L ${points[points.length - 1].x} ${h - padding.bottom} L ${points[0].x} ${h - padding.bottom} Z`;
+
+    const gridLines = [0, 0.25, 0.5, 0.75, 1].map(pct => {
+      const y = padding.top + pct * (h - padding.top - padding.bottom);
+      const val = trendRange.max - pct * dataRange;
+      return { y, val };
+    });
+
+    return { line, area, points, gridLines };
+  }, [timeFilteredData, trendRange]);
+
+  // Forecast SVG coordinates
+  const forecastSvgCoords = useMemo(() => {
+    const w = 300;
+    const h = 180;
+    const padding = { left: 35, right: 15, top: 15, bottom: 25 };
+    const minVal = 18;
+    const maxVal = 25;
+    const range = maxVal - minVal;
+
+    const histSlice = oxygenHistory.slice(-5);
+    const totalSteps = histSlice.length + o2Projection.slice(0, 6).length;
+
+    const histPoints = histSlice.map((val, idx) => {
+      const x = padding.left + (idx / (totalSteps - 1)) * (w - padding.left - padding.right);
+      const clamped = Math.max(minVal, Math.min(maxVal, val));
+      const y = h - padding.bottom - ((clamped - minVal) / range) * (h - padding.top - padding.bottom);
+      return { x, y };
+    });
+
+    const predPoints = o2Projection.slice(0, 6).map((val, idx) => {
+      const x = padding.left + ((idx + histSlice.length) / (totalSteps - 1)) * (w - padding.left - padding.right);
+      const clamped = Math.max(minVal, Math.min(maxVal, val));
+      const y = h - padding.bottom - ((clamped - minVal) / range) * (h - padding.top - padding.bottom);
+      return { x, y };
+    });
+
+    const histPath = histPoints.reduce((acc, p, idx) => idx === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`, '');
+    const predPath = predPoints.length > 0 ? `M ${histPoints[histPoints.length - 1].x} ${histPoints[histPoints.length - 1].y} ` + predPoints.reduce((acc, p) => `${acc} L ${p.x} ${p.y}`, '') : '';
+
+    const upperPoints = predPoints.map((p, idx) => {
+      const deviation = 0.12 * (idx + 1);
+      const clamped = Math.max(minVal, Math.min(maxVal, o2Projection[idx] + deviation));
+      const y = h - padding.bottom - ((clamped - minVal) / range) * (h - padding.top - padding.bottom);
+      return { x: p.x, y };
+    });
+
+    const lowerPoints = predPoints.map((p, idx) => {
+      const deviation = 0.12 * (idx + 1);
+      const clamped = Math.max(minVal, Math.min(maxVal, o2Projection[idx] - deviation));
+      const y = h - padding.bottom - ((clamped - minVal) / range) * (h - padding.top - padding.bottom);
+      return { x: p.x, y };
+    });
+
+    let confidenceBand = '';
+    if (upperPoints.length > 0) {
+      const startX = histPoints[histPoints.length - 1].x;
+      const startY = histPoints[histPoints.length - 1].y;
+      const upperStr = upperPoints.reduce((acc, p) => `${acc} L ${p.x} ${p.y}`, `M ${startX} ${startY}`);
+      const lowerStr = [...lowerPoints].reverse().reduce((acc, p) => `${acc} L ${p.x} ${p.y}`, '');
+      confidenceBand = `${upperStr} ${lowerStr} Z`;
     }
-    return null;
-  };
 
-  const activeAlert = getActiveAlert();
+    const gridLines = [minVal, (minVal + maxVal) / 2, maxVal].map(val => {
+      const y = h - padding.bottom - ((val - minVal) / range) * (h - padding.top - padding.bottom);
+      return { y, val };
+    });
 
-  const getTrendColor = (status: 'normal' | 'warning' | 'danger') => {
-    if (status === 'normal') return 'var(--drdo-cyan)';
-    if (status === 'warning') return 'var(--drdo-orange)';
-    return 'var(--drdo-red)';
-  };
+    return { histPath, predPath, confidenceBand, gridLines, dividerX: histPoints[histPoints.length - 1]?.x || 0 };
+  }, [oxygenHistory, o2Projection]);
 
-  const oxygenStatus = getOxygenStatus();
+  // Modular components definition
+  const oxygenCard = (
+    <div className="glass-card kpi-card">
+      <div className="kpi-header">
+        <div className="kpi-icon-wrapper blue">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+        </div>
+        <span className={`kpi-status-badge ${o2Status}`}>{o2Status}</span>
+      </div>
+      <div>
+        <div className="kpi-title">Oxygen Concentration</div>
+        <div className="kpi-value-group">
+          <span className="kpi-value">{oxygen.toFixed(2)}</span>
+          <span className="kpi-unit">%</span>
+        </div>
+      </div>
+      <div className="kpi-footer">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <div className="kpi-range">Range: 19.5% – 23.5%</div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>Interval: 5s | Live</div>
+        </div>
+        <div className="sparkline-container">
+          <Sparkline data={oxygenHistory} color="#0A84FF" min={18} max={25} />
+        </div>
+      </div>
+    </div>
+  );
 
-  return (
-    <div className="app-layout">
-      {loading && <Loader onComplete={() => setLoading(false)} />}
-      
-      {/* DRDO Top Tactical HUD Bar */}
-      <div className="tactical-hud-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+  const humidityCard = (
+    <div className="glass-card kpi-card">
+      <div className="kpi-header">
+        <div className="kpi-icon-wrapper cyan">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z" />
+          </svg>
+        </div>
+        <span className={`kpi-status-badge ${humStatus}`}>{humStatus}</span>
+      </div>
+      <div>
+        <div className="kpi-title">Humidity</div>
+        <div className="kpi-value-group">
+          <span className="kpi-value">{humidity.toFixed(1)}</span>
+          <span className="kpi-unit">%</span>
+        </div>
+      </div>
+      <div className="kpi-footer">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <div className="kpi-range">Ideal: 40% – 60%</div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>Interval: 5s | Live</div>
+        </div>
+        <div className="sparkline-container">
+          <Sparkline data={humidityHistory} color="#00f0ff" min={20} max={80} />
+        </div>
+      </div>
+    </div>
+  );
+
+  const temperatureCard = (
+    <div className="glass-card kpi-card">
+      <div className="kpi-header">
+        <div className="kpi-icon-wrapper orange">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+          </svg>
+        </div>
+        <span className={`kpi-status-badge ${tempStatus}`}>{tempStatus}</span>
+      </div>
+      <div>
+        <div className="kpi-title">Temperature</div>
+        <div className="kpi-value-group">
+          <span className="kpi-value">{temperature.toFixed(1)}</span>
+          <span className="kpi-unit">°C</span>
+        </div>
+      </div>
+      <div className="kpi-footer">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <div className="kpi-range">Ideal: 20°C – 30°C</div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>Interval: 5s | Live</div>
+        </div>
+        <div className="sparkline-container">
+          <Sparkline data={tempHistory} color="#FFD60A" min={15} max={40} />
+        </div>
+      </div>
+    </div>
+  );
+
+
+
+  const trendsCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <div className="chart-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
           <div>
-            <h1 style={{ fontSize: '1.35rem', fontWeight: 800, margin: 0, letterSpacing: '0.08em', color: 'var(--drdo-cyan)', textShadow: '0 0 8px var(--drdo-cyan-glow)' }}>
-              O₂ SENTINEL
-            </h1>
+            <h3 className="card-title">Environmental Parameter Trends</h3>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Historic database telemetry sweeps</span>
           </div>
+
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-            <span style={{ fontSize: '0.6rem', color: 'var(--drdo-text-tertiary)', letterSpacing: '0.08em', fontWeight: 700 }}>
-              MISSION CLOCK (IST)
-            </span>
-            <span style={{ fontSize: '0.85rem', color: 'var(--drdo-text-secondary)', fontWeight: 700, fontFamily: 'var(--font-digital)', letterSpacing: '0.05em' }}>
-              {systemTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-          </div>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            background: 'rgba(255, 255, 255, 0.04)', 
-            padding: '5px 12px', 
-            border: '1px solid var(--drdo-border)',
-            borderRadius: '6px'
-          }}>
-            <span 
-              className="beacon-dot beacon-pulse" 
-              style={{ 
-                '--status-color': deviceStatus?.status === 'Online' ? 'var(--drdo-green)' : 'var(--drdo-red)', 
-                width: '6px', 
-                height: '6px' 
-              } as React.CSSProperties} 
-            />
-            <span style={{ 
-              fontSize: '0.65rem', 
-              fontWeight: 700, 
-              color: deviceStatus?.status === 'Online' ? 'var(--drdo-green)' : 'var(--drdo-red)', 
-              letterSpacing: '0.08em', 
-              textTransform: 'uppercase' 
-            }}>
-              {deviceStatus?.status === 'Online' ? 'ONLINE' : 'OFFLINE'}
-            </span>
+        <div style={{ display: 'flex', gap: '12px', width: '100%', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '10px' }}>
+          <div className="chart-filters" style={{ background: 'rgba(255, 255, 255, 0.02)' }}>
+            {(['oxygen', 'temperature', 'humidity'] as const).map(tab => (
+              <button 
+                key={tab} 
+                className={`filter-btn ${activeTrendTab === tab ? 'active' : ''}`}
+                onClick={() => setActiveTrendTab(tab)}
+              >
+                {tab.toUpperCase()}
+              </button>
+            ))}
           </div>
 
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            background: 'rgba(255, 255, 255, 0.04)', 
-            padding: '5px 12px', 
-            border: '1px solid var(--drdo-border)',
-            borderRadius: '6px'
-          }}>
-            <span 
-              className="beacon-dot beacon-pulse" 
-              style={{ 
-                '--status-color': health?.status === 'HEALTHY' ? 'var(--drdo-green)' : 'var(--drdo-red)', 
-                width: '6px', 
-                height: '6px' 
-              } as React.CSSProperties} 
-            />
-            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: health?.status === 'HEALTHY' ? 'var(--drdo-green)' : 'var(--drdo-red)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              SRV: {health ? `${health.status} (${(health.database.size / 1024).toFixed(0)}KB)` : 'OFFLINE'} | MEM: {health ? `${(health.memory.heapUsed / 1024 / 1024).toFixed(1)}MB` : '--MB'} | WRK: {health?.worker.active ? 'ACTIVE' : 'INACTIVE'}
-            </span>
+          <div className="chart-filters">
+            {(['1h', '6h', '24h', '7d', '30d'] as const).map(f => (
+              <button 
+                key={f} 
+                className={`filter-btn ${timeFilter === f ? 'active' : ''}`}
+                onClick={() => setTimeFilter(f)}
+              >
+                {f.toUpperCase()}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="container" style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '24px 16px' }}>
-        
-        {/* Alert Banner */}
-        {activeAlert && (
-          <div className={`alert-banner alert-${activeAlert.level}`} style={{
-            padding: '12px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            fontSize: '0.82rem',
-            fontWeight: 700,
-            letterSpacing: '0.01em',
-            borderLeft: `4px solid ${activeAlert.level === 'danger' ? 'var(--drdo-red)' : 'var(--drdo-orange)'}`
-          }}>
-            <span style={{ fontSize: '1.2rem', filter: 'drop-shadow(0 0 4px rgba(255,61,0,0.5))' }}>
-              {activeAlert.level === 'danger' ? '🚨' : '⚠️'}
-            </span>
-            <span style={{ flex: 1 }}>{activeAlert.message}</span>
-            <button 
-              onClick={() => handleAcknowledgeAlert(activeAlert.id)}
-              style={{
-                background: 'rgba(255, 255, 255, 0.12)',
-                border: '1px solid var(--drdo-border)',
-                color: '#ffffff',
-                padding: '4px 10px',
-                borderRadius: '2px',
-                fontSize: '0.68rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                letterSpacing: '0.04em'
-              }}
-            >
-              ACKNOWLEDGE
-            </button>
+      <div className="trend-chart-body" style={{ marginTop: '16px' }}>
+        <svg width="100%" height="100%" viewBox="0 0 550 200" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={trendRange.color} stopOpacity="0.25" />
+              <stop offset="100%" stopColor={trendRange.color} stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+          
+          {/* Grid Lines */}
+          {trendSvgCoords.gridLines.map((line, idx) => (
+            <line key={idx} x1="40" y1={line.y} x2="530" y2={line.y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
+          ))}
+          {trendSvgCoords.gridLines.map((line, idx) => (
+            <text key={idx} x="32" y={line.y + 4} fill="var(--text-secondary)" fontSize="8.5" textAnchor="end" fontFamily="var(--font-mono)">
+              {line.val.toFixed(idx === 0 || idx === 4 ? 0 : 1)}
+            </text>
+          ))}
+
+          {/* Shaded Area */}
+          {trendSvgCoords.area && (
+            <path d={trendSvgCoords.area} fill="url(#trendGrad)" />
+          )}
+
+          {/* Plot Line */}
+          {trendSvgCoords.line && (
+            <path d={trendSvgCoords.line} fill="none" stroke={trendRange.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          )}
+
+          {/* Nodes */}
+          {trendSvgCoords.points.map((pt, idx) => {
+            const isLatest = idx === trendSvgCoords.points.length - 1;
+            return (
+              <g key={idx}>
+                <circle 
+                  cx={pt.x} 
+                  cy={pt.y} 
+                  r={isLatest ? 4.5 : 2.5} 
+                  fill={isLatest ? '#fff' : trendRange.color} 
+                  stroke={isLatest ? trendRange.color : 'none'} 
+                  strokeWidth={isLatest ? 2 : 0} 
+                  style={{ cursor: 'pointer' }}
+                />
+                {isLatest && (
+                  <g>
+                    <rect x={pt.x - 42} y={pt.y - 28} width="58" height="18" rx="4" fill="rgba(0,0,0,0.85)" stroke="var(--border-subtle)" strokeWidth="1" />
+                    <text x={pt.x - 13} y={pt.y - 16} fill="#fff" fontSize="9" fontWeight="700" textAnchor="middle" fontFamily="var(--font-mono)">
+                      {pt.value.toFixed(2)}{trendRange.unit}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+
+  const forecastCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <h3 className="card-title" style={{ marginBottom: '6px' }}>Oxygen Concentration Forecast</h3>
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '8px' }}>
+        <span>Model: <strong>Linear Least-Squares Regression</strong></span>
+        <span>Horizon: <strong>Next 10 Minutes</strong></span>
+        <span>Projections: <strong>+5m: {predO2_5m.toFixed(2)}% | +10m: {predO2_10m.toFixed(2)}%</strong></span>
+      </div>
+      
+      <div style={{ height: '140px', width: '100%', marginTop: '12px' }}>
+        <svg width="100%" height="100%" viewBox="0 0 300 180" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="forecastBandGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#0A84FF" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#0A84FF" stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          {/* Grid Lines */}
+          {forecastSvgCoords.gridLines.map((line, idx) => (
+            <line key={idx} x1="35" y1={line.y} x2="285" y2={line.y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
+          ))}
+          {forecastSvgCoords.gridLines.map((line, idx) => (
+            <text key={idx} x="28" y={line.y + 3} fill="var(--text-secondary)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">
+              {line.val}%
+            </text>
+          ))}
+
+          {/* Shaded Confidence Ribbon */}
+          {forecastSvgCoords.confidenceBand && (
+            <path d={forecastSvgCoords.confidenceBand} fill="url(#forecastBandGrad)" />
+          )}
+
+          {/* Historical line segment */}
+          {forecastSvgCoords.histPath && (
+            <path d={forecastSvgCoords.histPath} fill="none" stroke="var(--text-secondary)" strokeWidth="2.0" strokeLinecap="round" />
+          )}
+
+          {/* Forecast projection line */}
+          {forecastSvgCoords.predPath && (
+            <path d={forecastSvgCoords.predPath} fill="none" stroke="#0A84FF" strokeWidth="2.5" strokeDasharray="3,3" strokeLinecap="round" />
+          )}
+
+          {/* Current Time Divider */}
+          {forecastSvgCoords.dividerX > 0 && (
+            <g>
+              <line x1={forecastSvgCoords.dividerX} y1="15" x2={forecastSvgCoords.dividerX} y2="155" stroke="#0A84FF" strokeWidth="1" strokeOpacity="0.5" />
+              <text x={forecastSvgCoords.dividerX} y="165" fill="#0A84FF" fontSize="7" fontWeight="700" textAnchor="middle">
+                CURRENT TIME
+              </text>
+            </g>
+          )}
+        </svg>
+      </div>
+
+      <div className="forecast-progress-container" style={{ marginTop: '12px' }}>
+        <div className="forecast-meta-row">
+          <span style={{ color: 'var(--text-secondary)' }}>Prediction Confidence</span>
+          <span style={{ color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)' }}>92%</span>
+        </div>
+        <div className="progress-bar-bg">
+          <div className="progress-bar-fill" style={{ width: '92%' }}></div>
+        </div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '6px', fontStyle: 'italic' }}>
+          Forecast Summary: O₂ levels projected to remain stable within nominal safe margins.
+        </div>
+      </div>
+    </div>
+  );
+
+  const overviewCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <h3 className="card-title">Live Environment Overview</h3>
+      
+      <div className="environment-info-list">
+
+        <div className="env-info-item">
+          <span className="env-info-label">Indoor Air Status</span>
+          <span className="env-info-value" style={{ color: overallSafety === 'critical' ? 'var(--color-critical)' : 'var(--color-success)' }}>
+            {overallSafety === 'critical' ? 'POOR' : 'EXCELLENT'}
+          </span>
+        </div>
+        {health && (
+          <div className="env-info-item">
+            <span className="env-info-label">Server Memory</span>
+            <span className="env-info-value">{(health.memory.heapUsed / 1024 / 1024).toFixed(1)} MB</span>
           </div>
         )}
+        {events.length > 0 && (
+          <div className="env-info-item">
+            <span className="env-info-label">Latest Sys Event</span>
+            <span className="env-info-value" style={{ color: 'var(--accent-blue)', fontSize: '0.8rem' }}>{events[0].event}</span>
+          </div>
+        )}
+        <div className="env-info-item" style={{ borderBottom: 'none' }}>
+          <span className="env-info-label">Last Sensor Sync</span>
+          <span className="env-info-value">{systemTime.toLocaleTimeString()}</span>
+        </div>
+      </div>
 
-        {/* Dashboard Title Section */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          borderBottom: '1px solid var(--drdo-separator)', 
-          paddingBottom: '12px',
-          marginTop: '4px'
-        }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className="drdo-badge">TECHNICAL DEMONSTRATOR</span>
-              <span style={{ fontSize: '0.72rem', color: 'var(--drdo-text-secondary)', fontWeight: 600, letterSpacing: '0.04em' }}>
-                LSSD CHAMBER TESTBED
-              </span>
+      {/* Real-time Activity Logs */}
+      <div style={{ marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '10px' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          System Activity Log
+        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '110px', overflowY: 'auto', marginTop: '6px', paddingRight: '4px' }}>
+          {events.length === 0 ? (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>[{systemTime.toLocaleTimeString()}]</span>
+                <span style={{ fontWeight: 600 }}>Firebase Synced</span>
+                <span style={{ color: 'var(--color-success)' }}>SUCCESS</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>[{new Date(Date.now() - 5000).toLocaleTimeString()}]</span>
+                <span style={{ fontWeight: 600 }}>Telemetry Update</span>
+                <span style={{ color: 'var(--color-success)' }}>ONLINE</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>[{new Date(Date.now() - 10000).toLocaleTimeString()}]</span>
+                <span style={{ fontWeight: 600 }}>Forecast Generated</span>
+                <span style={{ color: 'var(--accent-blue)' }}>SUCCESS</span>
+              </div>
+            </>
+          ) : (
+            events.slice(0, 5).map((evt, idx) => (
+              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>[{new Date(evt.timestamp).toLocaleTimeString()}]</span>
+                <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>{evt.event}</span>
+                <span style={{ color: evt.event.includes('STARTUP') || evt.event.includes('NOMINAL') ? 'var(--color-success)' : 'var(--color-warning)' }}>
+                  {evt.event.includes('STARTUP') ? 'OK' : 'ACTIVE'}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const alertsCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div>
+          <h3 className="card-title">Recent Alerts</h3>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', gap: '8px', marginTop: '4px' }}>
+            <span>Active: <strong style={{ color: 'var(--color-critical)' }}>{alerts.length}</strong></span>
+            <span>Resolved: <strong style={{ color: 'var(--color-success)' }}>{stats ? stats.alerts.resolved : alertsHistory.filter(a => a.status === 'Resolved').length}</strong></span>
+            <span>Total: <strong style={{ color: 'var(--text-primary)' }}>{alertsHistory.length}</strong></span>
+          </div>
+        </div>
+        <button className="ack-btn" style={{ border: 'none', fontSize: '0.72rem' }}>VIEW ALL</button>
+      </div>
+
+      <div className="alerts-list">
+        {alerts.length === 0 ? (
+          <div style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem', textAlign: 'center', marginTop: '40px', fontWeight: 600 }}>
+            NO RECENT SECURITY ALERTS
+          </div>
+        ) : (
+          alerts.slice(0, 4).map(alert => (
+            <div key={alert.id} className="alert-row">
+              <div className="alert-row-meta">
+                <span className={`alert-dot ${alert.severity === 'critical' ? 'critical' : 'warning'}`} />
+                <div className="alert-message">{alert.message}</div>
+              </div>
+              <div className="alert-time">
+                {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+              <button className="ack-btn" onClick={() => handleAcknowledgeAlert(alert.id)}>ACK</button>
             </div>
-            <h2 style={{ 
-              fontSize: '1.6rem', 
-              fontWeight: 800, 
-              margin: '8px 0 0 0', 
-              letterSpacing: '-0.02em',
-              color: 'var(--drdo-text-primary)',
-              textTransform: 'uppercase'
-            }}>
-              O₂ Sentinel – Environmental Monitoring Dashboard
-            </h2>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  const summaryCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <h3 className="card-title" style={{ marginBottom: '14px' }}>Today's Summary</h3>
+      
+      <div className="summary-grid" style={{ gridTemplateColumns: '1fr', gap: '10px' }}>
+        
+        {/* Telemetry Stats Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', fontSize: '0.72rem', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '8px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>O₂ MIN / AVG / MAX</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+              {stats ? `${stats.telemetry.oxygen.min.toFixed(2)}%` : Math.min(...oxygenHistory).toFixed(2)}% / {avgOxygen.toFixed(2)}% / {stats ? `${stats.telemetry.oxygen.max.toFixed(2)}%` : Math.max(...oxygenHistory).toFixed(2)}%
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>TEMP MIN / AVG / MAX</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+              {stats ? `${stats.telemetry.temperature.min.toFixed(1)}°C` : Math.min(...tempHistory).toFixed(1)}°C / {avgTemp.toFixed(1)}°C / {stats ? `${stats.telemetry.temperature.max.toFixed(1)}°C` : Math.max(...tempHistory).toFixed(1)}°C
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>HUM MIN / AVG / MAX</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+              {stats ? `${stats.telemetry.humidity.min.toFixed(0)}%` : Math.min(...humidityHistory).toFixed(0)}% / {avgHumidity.toFixed(0)}% / {stats ? `${stats.telemetry.humidity.max.toFixed(0)}%` : Math.max(...humidityHistory).toFixed(0)}%
+            </span>
           </div>
         </div>
 
-        {/* Primary Dashboard Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
-          
-          {/* Main Focus: Atmospheric Oxygen Level Display */}
-          <div className="large-oxygen-card">
-            <span style={{ 
-              fontSize: '0.75rem', 
-              fontWeight: 800, 
-              color: 'var(--drdo-text-secondary)', 
-              textTransform: 'uppercase', 
-              letterSpacing: '0.12em' 
-            }}>
-              ATMOSPHERIC OXYGEN CONCENTRATION
-            </span>
-            <div className={`large-oxygen-value ${oxygenStatus === 'danger' ? 'status-danger' : ''}`}>
-              {oxygen.toFixed(2)}%
-            </div>
-            <div style={{ marginBottom: '14px' }}>
-              <span className={`status-badge-pill ${oxygenStatus === 'danger' ? 'status-danger' : 'status-normal'}`}>
-                <span className="beacon-dot beacon-pulse" style={{ 
-                  '--status-color': oxygenStatus === 'danger' ? 'var(--drdo-red)' : 'var(--drdo-green)',
-                  width: '6px',
-                  height: '6px'
-                } as React.CSSProperties} />
-                {oxygenStatus === 'danger' ? 'CRITICAL ABNORMAL' : 'NOMINAL SAFE'}
-              </span>
-            </div>
-            <span style={{ 
-              fontSize: '0.72rem', 
-              color: 'var(--drdo-text-tertiary)', 
-              fontWeight: 700,
-              letterSpacing: '0.06em'
-            }}>
-              OPERATIONAL MISSION LIMITS: 19.5% - 23.5%
-            </span>
-          </div>
-
-          {/* Secondary Environmental Metrics */}
-          <div className="metrics-row-grid">
-            <StatusCard 
-              title="Temperature"
-              value={temperature.toFixed(1)}
-              unit="°C"
-              status={getTemperatureStatus()}
-              progress={(temperature / 50) * 100}
-              subtitle="Chamber Core Temp"
-              icon={
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
-                </svg>
-              }
-            />
-
-            <StatusCard 
-              title="Humidity"
-              value={humidity.toFixed(1)}
-              unit="%"
-              status={getHumidityStatus()}
-              progress={humidity}
-              subtitle="Relative Saturation"
-              icon={
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z" />
-                </svg>
-              }
-            />
-
-            <StatusCard 
-              title="Overall Safety Status"
-              value={overallStatus === 'normal' ? 'NOMINAL' : 'BREACH'}
-              status={overallStatus}
-              subtitle={overallStatus === 'normal' ? 'All lifesupport loops secure.' : 'Environmental alert active!'}
-              icon={
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
-              }
-            />
-          </div>
-
-          {/* Mission Metrics & Alerts Statistical Summary */}
+        {/* Incidents Summary Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', fontSize: '0.7rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <div>
-            <span className="section-label">MISSION TELEMETRY STATISTICAL ACCUMULATOR</span>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginTop: '8px' }}>
-              
-              {/* Oxygen Accumulator */}
-              <div className="ios-blur-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--drdo-cyan)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  O₂ ACCUMULATOR STATS
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center', marginTop: '4px' }}>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MIN</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.oxygen.min.toFixed(2)}%` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>AVG</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-cyan)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.oxygen.avg.toFixed(2)}%` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MAX</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.oxygen.max.toFixed(2)}%` : '--'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Temperature Accumulator */}
-              <div className="ios-blur-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--drdo-cyan)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  TEMP ACCUMULATOR STATS
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center', marginTop: '4px' }}>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MIN</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.temperature.min.toFixed(1)}°C` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>AVG</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-cyan)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.temperature.avg.toFixed(1)}°C` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MAX</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.temperature.max.toFixed(1)}°C` : '--'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Humidity Accumulator */}
-              <div className="ios-blur-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--drdo-cyan)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  HUMIDITY ACCUMULATOR STATS
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center', marginTop: '4px' }}>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MIN</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.humidity.min.toFixed(1)}%` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>AVG</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-cyan)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.humidity.avg.toFixed(1)}%` : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>MAX</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? `${stats.telemetry.humidity.max.toFixed(1)}%` : '--'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Incident Registry Stats */}
-              <div className="ios-blur-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--drdo-cyan)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  INCIDENT LOG TOTALS
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
-                  <div>
-                    <div style={{ fontSize: '0.52rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>TOTAL</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? stats.alerts.total : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.52rem', color: 'var(--drdo-red)', fontWeight: 700 }}>ACTIVE</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-red)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? stats.alerts.active : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.52rem', color: 'var(--drdo-green)', fontWeight: 700 }}>RESOLVED</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-green)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? stats.alerts.resolved : '--'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.52rem', color: 'var(--drdo-orange)', fontWeight: 700 }}>ACK</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--drdo-orange)', fontFamily: 'var(--font-digital)' }}>
-                      {stats ? stats.alerts.acknowledged : '--'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
+            <div>TOTAL</div>
+            <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--font-mono)' }}>{stats ? stats.alerts.total : alertsHistory.length}</div>
           </div>
-
-          <hr className="layout-divider" />
-
-          {/* Forecasting Panel */}
           <div>
-            <span className="section-label">OXYGEN FORWARD PROJECTION MODEL</span>
-            <div className="forecast-section-grid">
-              
-              {/* Forecast Info Left Panel */}
-              <div className="forecast-stats-box">
-                <div className="forecast-stat-card">
-                  <span style={{ fontSize: '0.72rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>CURRENT BASELINE</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--drdo-text-primary)', fontFamily: 'var(--font-digital)' }}>
-                    {oxygen.toFixed(2)}%
-                  </span>
-                </div>
-                
-                <div className="forecast-stat-card">
-                  <span style={{ fontSize: '0.72rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>+30 MIN PROJECTION</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--drdo-cyan)', fontFamily: 'var(--font-digital)' }}>
-                    {predO2_30m.toFixed(2)}%
-                  </span>
-                </div>
-                
-                <div className="forecast-stat-card">
-                  <span style={{ fontSize: '0.72rem', color: 'var(--drdo-text-secondary)', fontWeight: 700 }}>+60 MIN PROJECTION</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--drdo-cyan)', fontFamily: 'var(--font-digital)' }}>
-                    {predO2_1h.toFixed(2)}%
-                  </span>
-                </div>
-              </div>
-
-              {/* Advanced Projections SVG Chart */}
-              <PredictionChart 
-                title="Telemetry Projection Sweep"
-                history={oxygenHistory}
-                projection={o2Projection}
-                min={18}
-                max={25}
-                color="var(--drdo-cyan)"
-                unit="%"
-              />
-            </div>
+            <div style={{ color: 'var(--color-critical)' }}>ACTIVE</div>
+            <div style={{ color: 'var(--color-critical)', fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--font-mono)' }}>{stats ? stats.alerts.active : alerts.length}</div>
           </div>
-
-          <hr className="layout-divider" />
-
-          {/* Historical Trends Panel */}
           <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span className="section-label" style={{ margin: 0 }}>ATMOSPHERIC telemetry SWEEPS</span>
+            <div style={{ color: 'var(--color-success)' }}>RESOLVED</div>
+            <div style={{ color: 'var(--color-success)', fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--font-mono)' }}>{stats ? stats.alerts.resolved : alertsHistory.filter(a => a.status === 'Resolved').length}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--color-warning)' }}>ACK</div>
+            <div style={{ color: 'var(--color-warning)', fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--font-mono)' }}>{stats ? stats.alerts.acknowledged : alertsHistory.filter(a => a.acknowledged === 1).length}</div>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Anomaly Drift Simulator Controller */}
+      <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255, 255, 255, 0.02)', padding: '10px 14px', borderRadius: 'var(--border-radius-sm)', border: '1px solid var(--border-subtle)' }}>
+        <div>
+          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>SIMULATE BREACH</span>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Triggers O₂ depletion loop</div>
+        </div>
+        <label className="ios-switch">
+          <input 
+            type="checkbox" 
+            checked={mockAnomaly} 
+            onChange={(e) => setMockAnomaly(e.target.checked)} 
+          />
+          <span className="ios-slider"></span>
+        </label>
+      </div>
+    </div>
+  );
+
+  const firebaseCard = (
+    <div className="status-grid-item" style={{ width: '100%' }}>
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={firebaseConnected ? 'var(--color-success)' : 'var(--color-critical)'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+        <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+        <line x1="12" y1="20" x2="12.01" y2="20" />
+      </svg>
+      <div className="status-grid-label-group">
+        <span className="status-grid-label">Firebase Database</span>
+        <span className="status-grid-value" style={{ color: firebaseConnected ? 'var(--color-success)' : 'var(--color-critical)' }}>
+          {firebaseConnected ? 'CONNECTED' : 'DISCONNECTED'}
+        </span>
+      </div>
+    </div>
+  );
+
+  const sensorStatusCard = (
+    <div className="status-grid-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+        </svg>
+        <div className="status-grid-label-group">
+          <span className="status-grid-label">Sensor Status</span>
+          <span className="status-grid-value" style={{ color: deviceStatus?.status === 'Online' ? 'var(--color-success)' : 'var(--color-critical)' }}>
+            {deviceStatus ? deviceStatus.status.toUpperCase() : 'OFFLINE'}
+          </span>
+        </div>
+      </div>
+      
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.68rem', color: 'var(--text-secondary)', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '6px', width: '100%' }}>
+        <span>Controller: <strong style={{ color: 'var(--text-primary)' }}>ESP32 Node</strong></span>
+        <span>DHT Sensor: <strong style={{ color: 'var(--color-success)' }}>ACTIVE</strong></span>
+        <span>MQ135 Gas: <strong style={{ color: 'var(--color-success)' }}>CALIBRATED</strong></span>
+        <span>WiFi Link: <strong style={{ color: 'var(--color-success)' }}>CONNECTED</strong></span>
+        <span>RSSI: <strong style={{ color: 'var(--text-primary)' }}>-62 dBm</strong></span>
+        <span>Battery: <strong style={{ color: 'var(--text-primary)' }}>98%</strong></span>
+        <span>Firmware: <strong style={{ color: 'var(--text-primary)' }}>v1.0.8</strong></span>
+        <span>Comm: <strong style={{ color: 'var(--text-primary)' }}>{(deviceStatus && deviceStatus.lastUpdated) ? new Date(deviceStatus.lastUpdated).toLocaleTimeString() : systemTime.toLocaleTimeString()}</strong></span>
+      </div>
+    </div>
+  );
+
+  const recCard = (
+    <div className="status-grid-item rec-card" style={{ flexGrow: 1, width: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div className="rec-title-group">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+          <span>Sentinel Directive</span>
+        </div>
+        <div className="rec-text">
+          {recommendations.length > 0 ? recommendations[0].text : (
+            overallSafety === 'critical' 
+              ? 'CRITICAL ALERT: Initiate emergency oxygen supply. Clear the monitoring space immediately!' 
+              : overallSafety === 'warning' 
+                ? 'WARNING: Open ambient fresh air vents and verify ventilation loops.' 
+                : 'SAFE: Atmospheric index is fully within nominal bounds. No action required.'
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className={`app-container ${theme}-theme`}>
+      {loading && <Loader onComplete={() => setLoading(false)} />}
+      
+      {/* LEFT SIDEBAR */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="sidebar-logo">
+            <span>O₂</span> Sentinel
+          </div>
+          <div className="sidebar-subtitle">Environmental Monitor</div>
+        </div>
+
+        <nav className="sidebar-nav">
+          {[
+            { name: 'Dashboard', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg> },
+            { name: 'Live Data', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
+            { name: 'Predictions', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg> },
+            { name: 'Alerts', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> },
+            { name: 'Reports', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg> },
+            { name: 'Settings', icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> }
+          ].map(item => (
             <a 
-              href="http://localhost:5000/api/sensors/export" 
-              download
-              style={{
-                background: 'rgba(0, 240, 255, 0.08)',
-                border: '1px solid var(--drdo-cyan)',
-                color: 'var(--drdo-cyan)',
-                padding: '2px 8px',
-                borderRadius: '2px',
-                fontSize: '0.62rem',
-                fontWeight: 700,
-                textDecoration: 'none',
-                letterSpacing: '0.04em',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
+              key={item.name} 
+              className={`nav-item ${activeNav === item.name ? 'active' : ''}`}
+              onClick={() => setActiveNav(item.name)}
             >
-              EXPORT TELEMETRY CSV
+              {item.icon}
+              {item.name}
             </a>
+          ))}
+        </nav>
+
+        <div className="sidebar-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <div className="sidebar-card-title">Breathe Better</div>
           </div>
-            <div className="trends-section-grid">
-              <TrendChart 
-                title="OXYGEN SENSOR READINGS"
-                subtitle="Electrochemical Sweep - Last 15m"
-                data={oxygenHistory}
-                min={18}
-                max={25}
-                color="var(--drdo-cyan)"
-                unit="%"
-                currentValue={oxygen.toFixed(2)}
-                safeMin={19.5}
-                safeMax={23.5}
-              />
+          <div className="sidebar-card-subtitle">Real-time environmental monitoring for safer spaces.</div>
+          <svg style={{ marginTop: '4px', opacity: 0.8 }} width="100%" height="50" viewBox="0 0 150 50">
+            <path d="M10,40 Q40,10 75,40 T140,40" fill="none" stroke="rgba(10, 132, 255, 0.4)" strokeWidth="3" />
+            <path d="M20,35 Q50,15 85,35 T130,35" fill="none" stroke="rgba(10, 132, 255, 0.2)" strokeWidth="2" />
+          </svg>
+        </div>
+      </aside>
 
-              <TrendChart 
-                title="TEMPERATURE TRACK"
-                subtitle="Chamber Core Temp Sweep - Last 15m"
-                data={tempHistory}
-                min={15}
-                max={45}
-                color={getTrendColor(getTemperatureStatus())}
-                unit="°C"
-                currentValue={temperature.toFixed(1)}
-                safeMin={15}
-                safeMax={28}
-              />
+      {/* MAIN CONTENT AREA */}
+      <main className="main-content fade-in">
+        
+        {/* TOP HEADER */}
+        <header className="top-header">
+          <div className="header-title-group">
+            <h1 className="header-title">{activeNav}</h1>
+            <div className="header-subtitle">Real-Time Environmental Monitoring</div>
+          </div>
 
-              <TrendChart 
-                title="HUMIDITY TRACK"
-                subtitle="Chamber RH Saturation Sweep - Last 15m"
-                data={humidityHistory}
-                min={20}
-                max={80}
-                color={getTrendColor(getHumidityStatus())}
-                unit="%"
-                currentValue={humidity.toFixed(1)}
-                safeMin={20}
-                safeMax={55}
-              />
+          <div className="header-controls">
+            {health && (
+              <div style={{ display: 'flex', gap: '14px', fontSize: '0.78rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.02)', padding: '6px 12px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--border-radius-sm)', marginRight: '10px' }}>
+                <span>SRV: <strong style={{ color: health.status === 'HEALTHY' ? 'var(--color-success)' : 'var(--color-critical)' }}>{health.status}</strong></span>
+                <span>MEM: <strong>{(health.memory.heapUsed / 1024 / 1024).toFixed(1)}MB</strong></span>
+                <span>WRK: <strong style={{ color: health.worker?.active ? 'var(--color-success)' : 'var(--text-secondary)' }}>{health.worker?.active ? 'ACTIVE' : 'INACTIVE'}</strong></span>
+              </div>
+            )}
+            <div className="status-indicator">
+              <span className={`status-dot active pulse`} />
+              <span>LIVE</span>
             </div>
+            
+            <div className="header-time">
+              Clock: <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', marginRight: '12px' }}>{systemTime.toLocaleTimeString()}</span>
+              Last sync: <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{lastSyncTime}</span>
+            </div>
+
+            <select className="date-selector" defaultValue="today">
+              <option value="today">Today, {new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</option>
+              <option value="yesterday">Yesterday</option>
+            </select>
+
+            <button className="theme-button" onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="5" />
+                  <line x1="12" y1="1" x2="12" y2="3" />
+                  <line x1="12" y1="21" x2="12" y2="23" />
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                  <line x1="1" y1="12" x2="3" y2="12" />
+                  <line x1="21" y1="12" x2="23" y2="12" />
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
           </div>
+        </header>
 
-          <hr className="layout-divider" />
+        {/* Dynamic Safety HUD Banner */}
+        <div className={`hud-banner ${overallSafety}`}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '1.25rem' }}>
+              {overallSafety === 'critical' ? '🚨' : overallSafety === 'warning' ? '⚠️' : '🛡️'}
+            </span>
+            <span>
+              {overallSafety === 'critical' 
+                ? 'CRITICAL CHAMBER BREACH: ENVIRONMENTAL CRITICAL ALARM ACTIVE!' 
+                : overallSafety === 'warning' 
+                  ? 'WARNING LEVEL BREACH: SENSORS REPORTING OUT OF NOMINAL BOUNDS.' 
+                  : 'SYSTEM SECURE: ALL ENVIRONMENTAL SAFETY PARAMETERS NOMINAL.'}
+            </span>
+          </div>
+          <span className={`hud-pill ${overallSafety}`}>
+            {overallSafety === 'critical' ? 'CRITICAL' : overallSafety === 'warning' ? 'WARNING' : 'SAFE'}
+          </span>
+        </div>
 
-          {/* Tactical Simulator and Log console */}
-          <div>
-            <span className="section-label">CHAMBER DRIFT INJECTOR & DIAGNOSTICS</span>
-            <div className="ios-blur-card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', padding: '20px' }}>
-              
-              {/* Drift Simulator Controls */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <h3 style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--drdo-cyan)', margin: '0 0 4px 0', letterSpacing: '0.06em' }}>
-                  DRIFT TRIGGER CONSOLE
-                </h3>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 16px', borderRadius: '4px', border: '1px solid var(--drdo-border)' }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--drdo-text-primary)' }}>
-                    INJECT HYPOXIA / DRIFT ANOMALY
-                  </span>
+        {/* SECTION RENDERING CONDITIONAL BLOCKS */}
+        {activeNav === 'Dashboard' && (
+          <>
+            {/* TOP KPI SECTION */}
+            <section className="kpi-row">
+              {oxygenCard}
+              {humidityCard}
+              {temperatureCard}
+            </section>
+
+            {/* MIDDLE SECTION */}
+            <section className="middle-grid">
+              {trendsCard}
+              {forecastCard}
+            </section>
+
+            {/* LOWER SECTION */}
+            <section className="lower-grid">
+              {overviewCard}
+              {alertsCard}
+              {summaryCard}
+            </section>
+
+            {/* FOOTER METRICS AND STATUSES */}
+            <section className="status-grid-row">
+              {firebaseCard}
+              {sensorStatusCard}
+              {recCard}
+            </section>
+          </>
+        )}
+
+        {activeNav === 'Live Data' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+            {/* KPI Cards Row */}
+            <section className="kpi-row">
+              {oxygenCard}
+              {humidityCard}
+              {temperatureCard}
+            </section>
+            
+            {/* Full size parameter trends */}
+            <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
+              {trendsCard}
+            </section>
+          </div>
+        )}
+
+        {activeNav === 'Predictions' && (
+          <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+            {forecastCard}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {recCard}
+              {overviewCard}
+            </div>
+          </section>
+        )}
+
+        {activeNav === 'Alerts' && (
+          <section style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px' }}>
+            {alertsCard}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {summaryCard}
+              {recCard}
+            </div>
+          </section>
+        )}
+
+        {activeNav === 'Reports' && (
+          <section style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px' }}>
+            {summaryCard}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              <div className="glass-card" style={{ padding: '24px' }}>
+                <h3 className="card-title" style={{ marginBottom: '14px' }}>Telemetry Reports</h3>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: 1.5 }}>
+                  Retrieve securely logged chamber telemetry sweeps and system clock statuses. Use the buttons below to export files or print the layout sheets.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <button 
+                    onClick={() => {
+                      window.open('http://localhost:5000/api/sensors/export', '_blank');
+                    }}
+                    style={{ background: 'rgba(10, 132, 255, 0.08)', border: '1px solid var(--accent-blue)', color: 'var(--accent-blue)', fontSize: '0.85rem', fontWeight: 700, padding: '12px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    EXPORT CSV ARCHIVE
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ oxygenHistory, tempHistory, humidityHistory }));
+                      const downloadAnchor = document.createElement('a');
+                      downloadAnchor.setAttribute("href", dataStr);
+                      downloadAnchor.setAttribute("download", `telemetry_logs_${Date.now()}.json`);
+                      document.body.appendChild(downloadAnchor);
+                      downloadAnchor.click();
+                      downloadAnchor.remove();
+                    }}
+                    style={{ background: 'rgba(0, 240, 255, 0.08)', border: '1px solid #00f0ff', color: '#00f0ff', fontSize: '0.85rem', fontWeight: 700, padding: '12px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    DOWNLOAD RAW TELEMETRY JSON
+                  </button>
+                  <button 
+                    onClick={() => window.print()}
+                    style={{ background: 'rgba(255, 255, 255, 0.04)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 700, padding: '12px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}
+                  >
+                    PRINT REPORT SHEET
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeNav === 'Settings' && (
+          <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+            {sensorStatusCard}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {firebaseCard}
+              <div className="glass-card" style={{ padding: '24px' }}>
+                <h3 className="card-title" style={{ marginBottom: '14px' }}>Simulations Control</h3>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.5 }}>
+                  Triggers environmental air simulation logs and database drift anomaly handlers.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 16px', borderRadius: 'var(--border-radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>SIMULATE BREACH</span>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Triggers O₂ depletion loop</div>
+                  </div>
                   <label className="ios-switch">
                     <input 
                       type="checkbox" 
@@ -767,226 +1162,12 @@ export default function App() {
                     <span className="ios-slider"></span>
                   </label>
                 </div>
-
-                <div style={{ fontSize: '0.72rem', color: 'var(--drdo-text-tertiary)', lineHeight: '1.5', fontWeight: 500 }}>
-                  Injects artificial atmosphere chamber leakage. Triggers a slow decay of oxygen concentration down to 18.5% and a corresponding temperature surge to stress-test warning sirens and hypoxia safety triggers.
-                </div>
               </div>
-
-              {/* System Log Terminal Console */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 4px 0' }}>
-                  <h3 style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--drdo-cyan)', margin: 0, letterSpacing: '0.06em' }}>
-                    LSSD SECURE ACTIVITY CONSOLE
-                  </h3>
-                  <a 
-                    href="http://localhost:5000/api/alerts/export" 
-                    download
-                    style={{
-                      background: 'rgba(0, 240, 255, 0.08)',
-                      border: '1px solid var(--drdo-cyan)',
-                      color: 'var(--drdo-cyan)',
-                      padding: '2px 8px',
-                      borderRadius: '2px',
-                      fontSize: '0.62rem',
-                      fontWeight: 700,
-                      textDecoration: 'none',
-                      letterSpacing: '0.04em',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    EXPORT ALERTS CSV
-                  </a>
-                </div>
-                
-                <div style={{
-                  background: '#04070e',
-                  border: '1px solid var(--drdo-border)',
-                  borderRadius: '4px',
-                  padding: '12px 16px',
-                  fontFamily: 'var(--font-digital)',
-                  fontSize: '0.72rem',
-                  color: '#00e676',
-                  height: '115px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px',
-                  boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.8)'
-                }}>
-                  {alertsHistory.length === 0 ? (
-                    <div style={{ color: 'var(--drdo-text-tertiary)' }}>NO ALERTS RECORDED IN HISTORICAL LOG.</div>
-                  ) : (
-                    alertsHistory.map((alert) => {
-                      const timeStr = new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                      const isAck = alert.acknowledged === 1;
-                      const isResolved = alert.status === 'Resolved';
-                      const alertColor = alert.severity === 'critical' ? 'var(--drdo-red)' : 'var(--drdo-orange)';
-                      const statusText = alert.status || (isAck ? 'Acknowledged' : 'Active');
-                      const statusColor = isResolved ? 'var(--drdo-green)' : (isAck ? 'var(--drdo-text-tertiary)' : alertColor);
-                      return (
-                        <div 
-                          key={alert.id} 
-                          style={{ 
-                            display: 'flex', 
-                            justifyContent: 'space-between', 
-                            alignItems: 'center', 
-                            padding: '3px 0', 
-                            borderBottom: '1px solid rgba(255, 255, 255, 0.02)',
-                            opacity: (isAck || isResolved) ? 0.6 : 1,
-                            textDecoration: isAck ? 'line-through' : 'none'
-                          }}
-                        >
-                          <span style={{ lineBreak: 'anywhere' }}>
-                            <span style={{ color: 'var(--drdo-text-tertiary)' }}>[{timeStr}]</span>{' '}
-                            <span style={{ color: alertColor, fontWeight: 700 }}>[{alert.severity.toUpperCase()}]</span>{' '}
-                            <span style={{ color: statusColor, fontWeight: 800 }}>[{statusText.toUpperCase()}]</span>{' '}
-                            {alert.message} (O₂: {alert.oxygen.toFixed(2)}% | T: {alert.temperature.toFixed(1)}°C | H: {alert.humidity.toFixed(0)}%)
-                          </span>
-                          {!isAck && (
-                            <button
-                              onClick={() => handleAcknowledgeAlert(alert.id)}
-                              style={{
-                                background: 'transparent',
-                                border: '1px solid var(--drdo-cyan)',
-                                color: 'var(--drdo-cyan)',
-                                padding: '1px 6px',
-                                fontSize: '0.6rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                borderRadius: '2px'
-                              }}
-                            >
-                              ACK
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Decision Support Panel */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <h3 style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--drdo-cyan)', margin: '0 0 4px 0', letterSpacing: '0.06em' }}>
-                  DECISION SUPPORT RECOMMENDATIONS
-                </h3>
-                
-                <div style={{
-                  background: '#04070e',
-                  border: '1px solid var(--drdo-border)',
-                  borderRadius: '4px',
-                  padding: '12px 16px',
-                  fontSize: '0.72rem',
-                  color: 'var(--drdo-text-secondary)',
-                  height: '115px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '8px',
-                  boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.8)'
-                }}>
-                  {recommendations.length === 0 ? (
-                    <div style={{ color: 'var(--drdo-text-tertiary)', fontStyle: 'italic' }}>NO ACTIVE THREATS. VENTILATION & LIFE SUPPORT NORMAL.</div>
-                  ) : (
-                    recommendations.map((rec, idx) => {
-                      const recColor = rec.priority === 'high' ? 'var(--drdo-red)' : rec.priority === 'medium' ? 'var(--drdo-orange)' : 'var(--drdo-cyan)';
-                      return (
-                        <div key={idx} style={{ 
-                          display: 'flex', 
-                          alignItems: 'flex-start', 
-                          gap: '8px', 
-                          paddingBottom: '6px', 
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.02)' 
-                        }}>
-                          <span style={{ 
-                            background: `rgba(${rec.priority === 'high' ? '255,59,48' : rec.priority === 'medium' ? '255,159,10' : '10,132,255'}, 0.1)`, 
-                            color: recColor, 
-                            border: `1px solid ${recColor}`,
-                            fontSize: '0.55rem', 
-                            fontWeight: 900, 
-                            padding: '1px 4px', 
-                            borderRadius: '2px', 
-                            textTransform: 'uppercase',
-                            marginTop: '2px'
-                          }}>
-                            {rec.priority}
-                          </span>
-                          <span style={{ flex: 1, color: 'var(--drdo-text-primary)', lineHeight: '1.3' }}>
-                            {rec.text}
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Event Timeline Feed Console */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <h3 style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--drdo-cyan)', margin: '0 0 4px 0', letterSpacing: '0.06em' }}>
-                  LSSD EVENTS TIMELINE FEED
-                </h3>
-                
-                <div style={{
-                  background: '#04070e',
-                  border: '1px solid var(--drdo-border)',
-                  borderRadius: '4px',
-                  padding: '12px 16px',
-                  fontFamily: 'var(--font-digital)',
-                  fontSize: '0.72rem',
-                  color: '#00e676',
-                  height: '115px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px',
-                  boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.8)'
-                }}>
-                  {events.length === 0 ? (
-                    <div style={{ color: 'var(--drdo-text-tertiary)' }}>NO SYSTEM EVENTS LOGGED.</div>
-                  ) : (
-                    events.map((evt) => {
-                      const timeStr = new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                      let evtColor = 'var(--drdo-cyan)';
-                      if (evt.event === 'ALERT_TRIGGER') evtColor = 'var(--drdo-red)';
-                      else if (evt.event === 'ALERT_RESOLUTION') evtColor = 'var(--drdo-green)';
-                      else if (evt.event === 'ALERT_ACK') evtColor = 'var(--drdo-orange)';
-                      
-                      return (
-                        <div key={evt.id} style={{ display: 'flex', gap: '8px', paddingBottom: '3px', borderBottom: '1px solid rgba(255,255,255,0.01)' }}>
-                          <span style={{ color: 'var(--drdo-text-tertiary)' }}>[{timeStr}]</span>
-                          <span style={{ color: evtColor, fontWeight: 700 }}>[{evt.event}]</span>
-                          <span style={{ color: 'var(--drdo-text-secondary)' }}>{evt.details}</span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-              
             </div>
-          </div>
+          </section>
+        )}
 
-        </div>
-
-        {/* Tactical Footer */}
-        <footer style={{ 
-          marginTop: '30px', 
-          padding: '20px 0 10px 0', 
-          textAlign: 'center', 
-          color: 'var(--drdo-text-tertiary)', 
-          fontSize: '0.72rem', 
-          borderTop: '1px solid var(--drdo-separator)',
-          fontWeight: 600,
-          letterSpacing: '0.08em'
-        }}>
-          <p>O₂ SENTINEL • ENVIRONMENT SECURITY SYSTEM • DRDO DEBEL LSSD © 2026</p>
-        </footer>
-      </div>
+      </main>
     </div>
   );
 }

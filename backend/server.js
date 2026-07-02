@@ -1,9 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 
-const { initializeDatabase } = require("./models/database");
-const { startLogging } = require("./services/sensorLogger");
-
 const sensorRoutes = require("./routes/sensorRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
@@ -26,11 +23,6 @@ app.use("/api/system", systemRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-initializeDatabase().then(() => {
-  // Start the background telemetry logging thread once DB is ready
-  startLogging();
-
-  app.listen(PORT, () => {
-    console.log(`✅ Server running on http://localhost:${PORT}`);
-  });
+app.listen(PORT, () => {
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });

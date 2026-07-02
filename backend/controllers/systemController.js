@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const { getDatabase, fetchSystemEvents } = require("../models/database");
 
 /**
  * GET /api/system/health
@@ -8,41 +7,17 @@ const { getDatabase, fetchSystemEvents } = require("../models/database");
  */
 async function getHealth(req, res) {
   try {
-    const db = getDatabase();
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: "Database offline",
-      });
-    }
-
     // 1. Server Uptime
     const uptime = process.uptime();
 
     // 2. Process Memory usage
     const memory = process.memoryUsage();
 
-    // 3. Database file size
-    const dbPath = path.join(__dirname, "../database/database.db");
-    let dbSize = 0;
-    try {
-      const stats = fs.statSync(dbPath);
-      dbSize = stats.size;
-    } catch (err) {
-      // Ignore
-    }
+    // 3. Database file size - set to 0 as SQLite is removed
+    const dbSize = 0;
 
-    // 4. Background Logging Worker Check
-    let workerActive = false;
-    try {
-      const latestLog = await db.get("SELECT timestamp FROM sensor_logs ORDER BY id DESC LIMIT 1");
-      if (latestLog) {
-        const timeDiff = Date.now() - new Date(latestLog.timestamp).getTime();
-        workerActive = timeDiff < 10000; // active if last write was less than 10 seconds ago
-      }
-    } catch (e) {
-      // Ignore
-    }
+    // 4. Background Logging Worker Check - set to false as SQLite background worker is removed
+    const workerActive = false;
 
     return res.json({
       success: true,
@@ -56,7 +31,7 @@ async function getHealth(req, res) {
         },
         database: {
           size: dbSize,
-          path: "database.db",
+          path: "database.db (removed)",
         },
         worker: {
           active: workerActive,
@@ -78,18 +53,10 @@ async function getHealth(req, res) {
  */
 async function getEvents(req, res) {
   try {
-    let limit = 30;
-    if (req.query.limit !== undefined) {
-      const parsedLimit = parseInt(req.query.limit, 10);
-      if (!isNaN(parsedLimit) && parsedLimit > 0 && parsedLimit <= 100) {
-        limit = parsedLimit;
-      }
-    }
-
-    const events = await fetchSystemEvents(limit);
+    // Return empty timeline array since database is removed
     return res.json({
       success: true,
-      data: events,
+      data: [],
     });
   } catch (err) {
     console.error("Controller Error (getEvents):", err);

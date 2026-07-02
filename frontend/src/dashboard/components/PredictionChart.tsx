@@ -67,7 +67,7 @@ export default function PredictionChart({
     
     projectionCoords.forEach((coord, idx) => {
       const factor = idx / (projectionCoords.length - 1);
-      const dy = 14 * factor; // grows from 0px to 14px variance at +60m
+      const dy = 14 * factor; // grows from 0px to 14px variance at +10m
       
       upperPoints.push({ x: coord.x, y: coord.y - dy });
       // unshift to reverse order and create a closed loop path
@@ -260,7 +260,7 @@ export default function PredictionChart({
             />
           )}
 
-          {/* Indicator Dot at 1hr end */}
+          {/* Indicator Dot at 10m end */}
           {projectionCoords.length > 0 && (
             <circle 
               cx={projectionCoords[projectionCoords.length - 1].x} 
@@ -277,7 +277,7 @@ export default function PredictionChart({
       {/* Footer Scale Details */}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--drdo-text-tertiary)', fontWeight: 600 }}>
         <span>PAST 15M (ACTUAL)</span>
-        <span>FUTURE 60M (CONFIDENCE MARGIN: ±0.5%)</span>
+        <span>FUTURE 10M (CONFIDENCE MARGIN: ±0.5%)</span>
       </div>
     </div>
   );
