@@ -106,9 +106,9 @@ export default function App() {
   const [timeFilter, setTimeFilter] = useState<'5m' | '10m'>('10m');
   
   // Real-time sensor state variables
-  const [oxygen, setOxygen] = useState(20.8);
-  const [temperature, setTemperature] = useState(24.5);
-  const [humidity, setHumidity] = useState(48.2);
+  const [oxygen, setOxygen] = useState(0);
+  const [temperature, setTemperature] = useState(0);
+  const [humidity, setHumidity] = useState(0);
   const [mockAnomaly, setMockAnomaly] = useState(false);
   const [deviceStatus, setDeviceStatus] = useState<{ status: string; battery: string; lastUpdated: string } | null>(null);
 
@@ -117,21 +117,13 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
 
   // Buffer state variables (Telemetry graphs)
-  const [oxygenHistory, setOxygenHistory] = useState<number[]>(() => 
-    Array.from({ length: 15 }, () => 20.7 + Math.random() * 0.2)
-  );
-  const [tempHistory, setTempHistory] = useState<number[]>(() => 
-    Array.from({ length: 15 }, () => 24.1 + Math.random() * 0.5)
-  );
-  const [humidityHistory, setHumidityHistory] = useState<number[]>(() => 
-    Array.from({ length: 15 }, () => 47.5 + Math.random() * 0.9)
-  );
+  const [oxygenHistory, setOxygenHistory] = useState<number[]>([]);
+  const [tempHistory, setTempHistory] = useState<number[]>([]);
+  const [humidityHistory, setHumidityHistory] = useState<number[]>([]);
 
-  const [predO2_5m, setPredO2_5m] = useState<number>(20.7);
-  const [predO2_10m, setPredO2_10m] = useState<number>(20.5);
-  const [o2Projection, setO2Projection] = useState<number[]>(() => 
-    Array.from({ length: 15 }, () => 20.7 + (Math.random() - 0.5) * 0.1)
-  );
+  const [predO2_5m, setPredO2_5m] = useState<number>(0);
+  const [predO2_10m, setPredO2_10m] = useState<number>(0);
+  const [o2Projection, setO2Projection] = useState<number[]>([]);
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [alertsHistory, setAlertsHistory] = useState<Alert[]>([]);
@@ -147,22 +139,22 @@ export default function App() {
       try {
         const historyData = await getSensorHistory();
         if (active && Array.isArray(historyData) && historyData.length > 0) {
-          const o2Vals = historyData.map((row: { oxygen?: number }) => row.oxygen ?? 20.8);
-          const tempVals = historyData.map((row: { temperature?: number }) => row.temperature ?? 24.5);
-          const humVals = historyData.map((row: { humidity?: number }) => row.humidity ?? 48.2);
+          const o2Vals = historyData.map((row: { oxygen?: number }) => row.oxygen ?? 0);
+          const tempVals = historyData.map((row: { temperature?: number }) => row.temperature ?? 0);
+          const humVals = historyData.map((row: { humidity?: number }) => row.humidity ?? 0);
 
           const padArray = (arr: number[], fallbackVal: number) => {
             const padSize = 15 - arr.length;
             if (padSize > 0) {
-              const padding = Array.from({ length: padSize }, () => fallbackVal);
+              const padding = Array.from({ length: padSize }, () => arr[0] ?? fallbackVal);
               return [...padding, ...arr];
             }
             return arr;
           };
 
-          setOxygenHistory(padArray(o2Vals, 20.8));
-          setTempHistory(padArray(tempVals, 24.5));
-          setHumidityHistory(padArray(humVals, 48.2));
+          setOxygenHistory(padArray(o2Vals, 0));
+          setTempHistory(padArray(tempVals, 0));
+          setHumidityHistory(padArray(humVals, 0));
           setFirebaseStatus('CONNECTED');
           setLastSyncTime(new Date().toLocaleTimeString());
         }
@@ -188,9 +180,9 @@ export default function App() {
             if (sensorData && sensorData.exists === false) {
               setFirebaseStatus('WAITING_FOR_DATA');
             } else {
-              const o2Val = sensorData.oxygen ?? 20.8;
-              const tempVal = sensorData.temperature ?? 24.5;
-              const humVal = sensorData.humidity ?? 48.2;
+              const o2Val = sensorData.oxygen ?? 0;
+              const tempVal = sensorData.temperature ?? 0;
+              const humVal = sensorData.humidity ?? 0;
               setOxygen(o2Val);
               setTemperature(tempVal);
               setHumidity(humVal);
@@ -205,21 +197,6 @@ export default function App() {
         } catch (err) {
           console.warn("Telemetry poll failed:", err);
           if (active) {
-            setOxygen(prev => {
-              const val = Math.min(21.1, Math.max(20.5, prev + (Math.random() - 0.5) * 0.04));
-              setTimeout(() => setOxygenHistory(h => [...h.slice(1), val]), 0);
-              return val;
-            });
-            setTemperature(prev => {
-              const val = Math.min(26.0, Math.max(23.0, prev + (Math.random() - 0.5) * 0.1));
-              setTimeout(() => setTempHistory(h => [...h.slice(1), val]), 0);
-              return val;
-            });
-            setHumidity(prev => {
-              const val = Math.min(52.0, Math.max(45.0, prev + (Math.random() - 0.5) * 0.2));
-              setTimeout(() => setHumidityHistory(h => [...h.slice(1), val]), 0);
-              return val;
-            });
             setSystemTime(new Date());
             setFirebaseStatus('DISCONNECTED');
           }
@@ -421,6 +398,11 @@ export default function App() {
   }, [selectedTrendData, timeFilter]);
 
   const trendRange = useMemo(() => {
+    if (timeFilteredData.length === 0) {
+      if (activeTrendTab === 'oxygen') return { min: 15, max: 25, unit: '%', color: '#0A84FF', label: 'Oxygen' };
+      if (activeTrendTab === 'temperature') return { min: 0, max: 50, unit: '°C', color: '#FFD60A', label: 'Temperature' };
+      return { min: 0, max: 100, unit: '%', color: '#00f0ff', label: 'Humidity' };
+    }
     let dataMin = Math.min(...timeFilteredData);
     let dataMax = Math.max(...timeFilteredData);
     if (activeTrendTab === 'oxygen' && dataMax - dataMin < 0.5) {
@@ -497,6 +479,17 @@ export default function App() {
 
     // Calculate dynamic axis range
     const allVals = [...histSlice, ...projSlice];
+    if (allVals.length === 0) {
+      return {
+        histPath: '',
+        predPath: '',
+        confidenceBand: '',
+        gridLines: [],
+        dividerX: 0,
+        dividerY: 0,
+        latestValue: 0
+      };
+    }
     let dataMin = Math.min(...allVals);
     let dataMax = Math.max(...allVals);
     if (dataMax - dataMin < 0.5) {
@@ -563,7 +556,7 @@ export default function App() {
       gridLines,
       dividerX: latestHistPoint?.x || 0,
       dividerY: latestHistPoint?.y || 0,
-      latestValue: histSlice[histSlice.length - 1]
+      latestValue: histSlice[histSlice.length - 1] ?? 0
     };
   }, [oxygenHistory, o2Projection]);
 
@@ -1023,19 +1016,19 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>O₂ MIN / AVG / MAX</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-              {stats ? `${stats.telemetry.oxygen.min.toFixed(2)}%` : Math.min(...oxygenHistory).toFixed(2)}% / {avgOxygen.toFixed(2)}% / {stats ? `${stats.telemetry.oxygen.max.toFixed(2)}%` : Math.max(...oxygenHistory).toFixed(2)}%
+              {stats ? `${stats.telemetry.oxygen.min.toFixed(2)}%` : (oxygenHistory.length > 0 ? `${Math.min(...oxygenHistory).toFixed(2)}%` : '0.00%')} / {avgOxygen.toFixed(2)}% / {stats ? `${stats.telemetry.oxygen.max.toFixed(2)}%` : (oxygenHistory.length > 0 ? `${Math.max(...oxygenHistory).toFixed(2)}%` : '0.00%')}
             </span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>TEMP MIN / AVG / MAX</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-              {stats ? `${stats.telemetry.temperature.min.toFixed(1)}°C` : Math.min(...tempHistory).toFixed(1)}°C / {avgTemp.toFixed(1)}°C / {stats ? `${stats.telemetry.temperature.max.toFixed(1)}°C` : Math.max(...tempHistory).toFixed(1)}°C
+              {stats ? `${stats.telemetry.temperature.min.toFixed(1)}°C` : (tempHistory.length > 0 ? `${Math.min(...tempHistory).toFixed(1)}°C` : '0.0°C')} / {avgTemp.toFixed(1)}°C / {stats ? `${stats.telemetry.temperature.max.toFixed(1)}°C` : (tempHistory.length > 0 ? `${Math.max(...tempHistory).toFixed(1)}°C` : '0.0°C')}
             </span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>HUM MIN / AVG / MAX</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-              {stats ? `${stats.telemetry.humidity.min.toFixed(0)}%` : Math.min(...humidityHistory).toFixed(0)}% / {avgHumidity.toFixed(0)}% / {stats ? `${stats.telemetry.humidity.max.toFixed(0)}%` : Math.max(...humidityHistory).toFixed(0)}%
+              {stats ? `${stats.telemetry.humidity.min.toFixed(0)}%` : (humidityHistory.length > 0 ? `${Math.min(...humidityHistory).toFixed(0)}%` : '0%')} / {avgHumidity.toFixed(0)}% / {stats ? `${stats.telemetry.humidity.max.toFixed(0)}%` : (humidityHistory.length > 0 ? `${Math.max(...humidityHistory).toFixed(0)}%` : '0%')}
             </span>
           </div>
         </div>
