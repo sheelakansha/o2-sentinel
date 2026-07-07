@@ -1,4 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
+import {
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+  ResponsiveContainer
+} from 'recharts';
 import Loader from './dashboard/components/Loader';
 import {
   getSensorData,
@@ -53,6 +65,36 @@ const formatTime2DigitSafe = (timestamp: any) => {
   if (!timestamp) return '--:--';
   const d = typeof timestamp === 'object' && timestamp instanceof Date ? timestamp : new Date(timestamp);
   return isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+const CustomTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    const value = data.oxygen !== null ? data.oxygen : data.predicted;
+    const isPredicted = data.oxygen === null || data.time === '+5' || data.time === '+10';
+    return (
+      <div 
+        className="glass-card" 
+        style={{ 
+          padding: '10px 14px', 
+          borderRadius: '12px', 
+          border: '1px solid rgba(255,255,255,0.08)', 
+          background: 'rgba(10, 10, 12, 0.95)', 
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          transform: 'none',
+          transition: 'none'
+        }}
+      >
+        <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          {isPredicted ? `Prediction (${data.time}m)` : `Historical (${data.time}m)`}
+        </p>
+        <p style={{ margin: '4px 0 0 0', fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+          {value ? value.toFixed(2) : '0.00'}%
+        </p>
+      </div>
+    );
+  }
+  return null;
 };
 
 
@@ -117,6 +159,7 @@ export default function App() {
   // Interactive trends chart tabs
   const [activeTrendTab, setActiveTrendTab] = useState<'oxygen' | 'temperature' | 'humidity'>('oxygen');
   const [timeFilter, setTimeFilter] = useState<'5m' | '10m'>('10m');
+  const [predictionChartType, setPredictionChartType] = useState<'area' | 'linear'>('area');
   
   // Real-time sensor state variables
   const [oxygen, setOxygen] = useState(0);
@@ -401,6 +444,18 @@ export default function App() {
   }, [humidityHistory]);
 
 
+
+  const predictionChartData = useMemo(() => {
+    return [
+      { time: "-20", oxygen: 20.82, predicted: null },
+      { time: "-15", oxygen: 20.79, predicted: null },
+      { time: "-10", oxygen: 20.76, predicted: null },
+      { time: "-5", oxygen: 20.74, predicted: null },
+      { time: "Now", oxygen: 20.72, predicted: 20.72 },
+      { time: "+5", oxygen: null, predicted: 20.69 },
+      { time: "+10", oxygen: null, predicted: 20.63 }
+    ];
+  }, []);
 
   // Custom Trend Line Plotter
   const selectedTrendData = useMemo(() => {
@@ -732,6 +787,169 @@ export default function App() {
   );
 
 
+
+  const predictionAreaCard = (
+    <div className="glass-card" style={{ width: '100%' }}>
+      <div className="chart-header" style={{ marginBottom: '24px' }}>
+        <div>
+          <h3 className="card-title">Oxygen Prediction (5 & 10 Minutes)</h3>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+            Predictive machine learning model projection
+          </div>
+        </div>
+        
+        <div className="chart-filters">
+          <button 
+            className={`filter-btn ${predictionChartType === 'area' ? 'active' : ''}`}
+            onClick={() => setPredictionChartType('area')}
+          >
+            Area Chart
+          </button>
+          <button 
+            className={`filter-btn ${predictionChartType === 'linear' ? 'active' : ''}`}
+            onClick={() => setPredictionChartType('linear')}
+          >
+            Linear Chart
+          </button>
+        </div>
+      </div>
+
+      <div className="prediction-container">
+        {/* Chart View */}
+        <div style={{ height: '240px', width: '100%', position: 'relative' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            {predictionChartType === 'area' ? (
+              <AreaChart data={predictionChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="predictionAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--accent-blue)" stopOpacity={0.35}/>
+                    <stop offset="95%" stopColor="var(--accent-blue)" stopOpacity={0.0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="rgba(255, 255, 255, 0.04)" strokeDasharray="3 3" vertical={false} />
+                <XAxis 
+                  dataKey="time" 
+                  stroke="var(--text-secondary)" 
+                  fontSize={10.5} 
+                  tickLine={false} 
+                  axisLine={false} 
+                  dy={10}
+                />
+                <YAxis 
+                  domain={['dataMin - 0.02', 'dataMax + 0.02']} 
+                  stroke="var(--text-secondary)" 
+                  fontSize={10} 
+                  tickLine={false} 
+                  axisLine={false} 
+                  dx={-5}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.08)', strokeWidth: 1 }} />
+                <ReferenceLine 
+                  x="Now" 
+                  stroke="rgba(255, 255, 255, 0.3)" 
+                  strokeDasharray="4 4" 
+                  label={{ value: 'NOW', fill: 'var(--accent-blue)', fontSize: 9.5, fontWeight: 700, position: 'top', offset: 12 }} 
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="predicted" 
+                  stroke="#00f0ff" 
+                  strokeWidth={2.5} 
+                  fill="url(#predictionAreaGrad)" 
+                  connectNulls 
+                  isAnimationActive={true}
+                  animationDuration={1000}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="oxygen" 
+                  stroke="var(--accent-blue)" 
+                  strokeWidth={2} 
+                  dot={{ r: 3.5, fill: 'var(--accent-blue)', strokeWidth: 0 }} 
+                  connectNulls 
+                  activeDot={{ r: 5.5 }}
+                />
+              </AreaChart>
+            ) : (
+              <LineChart data={predictionChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(255, 255, 255, 0.04)" strokeDasharray="3 3" vertical={false} />
+                <XAxis 
+                  dataKey="time" 
+                  stroke="var(--text-secondary)" 
+                  fontSize={10.5} 
+                  tickLine={false} 
+                  axisLine={false} 
+                  dy={10}
+                />
+                <YAxis 
+                  domain={['dataMin - 0.02', 'dataMax + 0.02']} 
+                  stroke="var(--text-secondary)" 
+                  fontSize={10} 
+                  tickLine={false} 
+                  axisLine={false} 
+                  dx={-5}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.08)', strokeWidth: 1 }} />
+                <ReferenceLine 
+                  x="Now" 
+                  stroke="rgba(255, 255, 255, 0.3)" 
+                  strokeDasharray="4 4" 
+                  label={{ value: 'NOW', fill: 'var(--accent-blue)', fontSize: 9.5, fontWeight: 700, position: 'top', offset: 12 }} 
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="predicted" 
+                  stroke="#00f0ff" 
+                  strokeWidth={2.5} 
+                  dot={{ r: 4, fill: '#00f0ff', strokeWidth: 0 }} 
+                  connectNulls 
+                  activeDot={{ r: 6 }}
+                  isAnimationActive={true}
+                  animationDuration={1000}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="oxygen" 
+                  stroke="var(--accent-blue)" 
+                  strokeWidth={2} 
+                  dot={{ r: 3.5, fill: 'var(--accent-blue)', strokeWidth: 0 }} 
+                  connectNulls 
+                  activeDot={{ r: 5.5 }}
+                />
+              </LineChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+
+        {/* Prediction Info Cards */}
+        <div className="prediction-summary-cards">
+          <div className="prediction-summary-mini-card">
+            <span className="prediction-mini-title">Prediction +5 min</span>
+            <div className="prediction-mini-value-group">
+              <span className="prediction-mini-value">20.69</span>
+              <span className="prediction-mini-unit">%</span>
+            </div>
+          </div>
+          
+          <div className="prediction-summary-mini-card">
+            <span className="prediction-mini-title">Prediction +10 min</span>
+            <div className="prediction-mini-value-group">
+              <span className="prediction-mini-value">20.63</span>
+              <span className="prediction-mini-unit">%</span>
+            </div>
+          </div>
+
+          <div className="prediction-summary-mini-card">
+            <span className="prediction-mini-title">Model Confidence</span>
+            <div className="prediction-mini-value-group">
+              <span className="prediction-mini-value">96</span>
+              <span className="prediction-mini-unit">%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   const trendsCard = (
     <div className="glass-card" style={{ width: '100%' }}>
@@ -1379,6 +1597,11 @@ export default function App() {
               {forecastCard}
             </section>
 
+            {/* NEW PREDICTION AREA CARD */}
+            <section style={{ marginTop: '24px' }}>
+              {predictionAreaCard}
+            </section>
+
             {/* LOWER SECTION */}
             <section className="lower-grid">
               {overviewCard}
@@ -1407,13 +1630,17 @@ export default function App() {
             {/* Full size parameter trends */}
             <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
               {trendsCard}
+              {predictionAreaCard}
             </section>
           </div>
         )}
 
         {activeNav === 'Predictions' && (
           <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
-            {forecastCard}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {forecastCard}
+              {predictionAreaCard}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
               {recCard}
               {overviewCard}

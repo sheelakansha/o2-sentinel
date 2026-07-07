@@ -913,3 +913,82 @@ body {
   100% { transform: rotate(360deg); }
 }
 
+/* OXYGEN PREDICTION AREA CHART CARD */
+.prediction-container {
+  display: grid;
+  grid-template-columns: 2.2fr 1fr;
+  gap: 24px;
+  align-items: center;
+}
+
+.prediction-summary-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prediction-summary-mini-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: var(--border-radius-md);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.prediction-summary-mini-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.09);
+  transform: translateY(-2px);
+}
+
+.prediction-mini-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.prediction-mini-value-group {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.prediction-mini-value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.prediction-mini-unit {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .prediction-container {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .prediction-summary-cards {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+  .prediction-summary-mini-card {
+    flex: 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .prediction-summary-cards {
+    flex-direction: column;
+  }
+}
+
+
