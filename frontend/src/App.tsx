@@ -71,7 +71,12 @@ const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const value = data.oxygen !== null ? data.oxygen : data.predicted;
-    const isPredicted = data.oxygen === null || data.time === '+5' || data.time === '+10';
+    let labelText = "Historical Reading";
+    if (data.time === "+5") {
+      labelText = "Prediction (+5 min)";
+    } else if (data.time === "+10") {
+      labelText = "Prediction (+10 min)";
+    }
     return (
       <div 
         className="glass-card" 
@@ -86,9 +91,9 @@ const CustomTooltip = ({ active, payload }: any) => {
         }}
       >
         <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-          {isPredicted ? `Prediction (${data.time}m)` : `Historical (${data.time}m)`}
+          {labelText}
         </p>
-        <p style={{ margin: '4px 0 0 0', fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+        <p style={{ margin: '4px 0 0 0', fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: '#22D3EE', letterSpacing: '-0.02em' }}>
           {value ? value.toFixed(2) : '0.00'}%
         </p>
       </div>
@@ -851,11 +856,11 @@ export default function App() {
         <div style={{ height: '240px', width: '100%', position: 'relative' }}>
           <ResponsiveContainer width="100%" height="100%">
             {predictionChartType === 'area' ? (
-              <AreaChart data={predictionChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+              <AreaChart data={predictionChartData} margin={{ top: 18, right: 10, left: -25, bottom: 0 }}>
                 <defs>
                   <linearGradient id="predictionAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--accent-blue)" stopOpacity={0.35}/>
-                    <stop offset="95%" stopColor="var(--accent-blue)" stopOpacity={0.0}/>
+                    <stop offset="5%" stopColor="#22D3EE" stopOpacity={0.20}/>
+                    <stop offset="95%" stopColor="#22D3EE" stopOpacity={0.0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="rgba(255, 255, 255, 0.04)" strokeDasharray="3 3" vertical={false} />
@@ -878,32 +883,58 @@ export default function App() {
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.08)', strokeWidth: 1 }} />
                 <ReferenceLine 
                   x="Now" 
-                  stroke="rgba(255, 255, 255, 0.3)" 
+                  stroke="rgba(255, 255, 255, 0.15)" 
                   strokeDasharray="4 4" 
-                  label={{ value: 'NOW', fill: 'var(--accent-blue)', fontSize: 9.5, fontWeight: 700, position: 'top', offset: 12 }} 
+                  label={(props: any) => {
+                    const { viewBox } = props;
+                    const { x, y } = viewBox;
+                    return (
+                      <g>
+                        <text x={x} y={y - 14} fill="#2F80FF" fontSize={9.5} fontWeight={700} textAnchor="middle">
+                          NOW
+                        </text>
+                        <text x={x} y={y - 3} fill="#2F80FF" fontSize={10} fontWeight={400} textAnchor="middle">
+                          │
+                        </text>
+                      </g>
+                    );
+                  }}
                 />
                 <Area 
                   type="monotone" 
                   dataKey="predicted" 
-                  stroke="#00f0ff" 
-                  strokeWidth={2.5} 
+                  stroke="#22D3EE" 
+                  strokeWidth={3.5} 
                   fill="url(#predictionAreaGrad)" 
                   connectNulls 
                   isAnimationActive={true}
                   animationDuration={1000}
+                  dot={(props: any) => {
+                    const { cx, cy, payload } = props;
+                    if (payload.time === '+5' || payload.time === '+10') {
+                      return (
+                        <g key={payload.time}>
+                          <circle cx={cx} cy={cy} r={8} fill="#22D3EE" fillOpacity={0.25} style={{ filter: 'drop-shadow(0 0 3px #22D3EE)' }} />
+                          <circle cx={cx} cy={cy} r={4.5} fill="#22D3EE" stroke="#FFFFFF" strokeWidth={1} />
+                        </g>
+                      );
+                    }
+                    return null;
+                  }}
+                  activeDot={{ r: 6, fill: '#22D3EE', strokeWidth: 1.5, stroke: '#ffffff' }}
                 />
                 <Line 
                   type="monotone" 
                   dataKey="oxygen" 
-                  stroke="var(--accent-blue)" 
-                  strokeWidth={2} 
-                  dot={{ r: 3.5, fill: 'var(--accent-blue)', strokeWidth: 0 }} 
+                  stroke="#2F80FF" 
+                  strokeWidth={2.5} 
+                  dot={{ r: 3, fill: '#2F80FF', strokeWidth: 0 }} 
                   connectNulls 
-                  activeDot={{ r: 5.5 }}
+                  activeDot={{ r: 5 }}
                 />
               </AreaChart>
             ) : (
-              <LineChart data={predictionChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+              <LineChart data={predictionChartData} margin={{ top: 18, right: 10, left: -25, bottom: 0 }}>
                 <CartesianGrid stroke="rgba(255, 255, 255, 0.04)" strokeDasharray="3 3" vertical={false} />
                 <XAxis 
                   dataKey="time" 
@@ -924,29 +955,53 @@ export default function App() {
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.08)', strokeWidth: 1 }} />
                 <ReferenceLine 
                   x="Now" 
-                  stroke="rgba(255, 255, 255, 0.3)" 
+                  stroke="rgba(255, 255, 255, 0.15)" 
                   strokeDasharray="4 4" 
-                  label={{ value: 'NOW', fill: 'var(--accent-blue)', fontSize: 9.5, fontWeight: 700, position: 'top', offset: 12 }} 
+                  label={(props: any) => {
+                    const { viewBox } = props;
+                    const { x, y } = viewBox;
+                    return (
+                      <g>
+                        <text x={x} y={y - 14} fill="#2F80FF" fontSize={9.5} fontWeight={700} textAnchor="middle">
+                          NOW
+                        </text>
+                        <text x={x} y={y - 3} fill="#2F80FF" fontSize={10} fontWeight={400} textAnchor="middle">
+                          │
+                        </text>
+                      </g>
+                    );
+                  }}
                 />
                 <Line 
                   type="monotone" 
                   dataKey="predicted" 
-                  stroke="#00f0ff" 
-                  strokeWidth={2.5} 
-                  dot={{ r: 4, fill: '#00f0ff', strokeWidth: 0 }} 
+                  stroke="#22D3EE" 
+                  strokeWidth={3.5} 
                   connectNulls 
-                  activeDot={{ r: 6 }}
                   isAnimationActive={true}
                   animationDuration={1000}
+                  dot={(props: any) => {
+                    const { cx, cy, payload } = props;
+                    if (payload.time === '+5' || payload.time === '+10') {
+                      return (
+                        <g key={payload.time}>
+                          <circle cx={cx} cy={cy} r={8} fill="#22D3EE" fillOpacity={0.25} style={{ filter: 'drop-shadow(0 0 3px #22D3EE)' }} />
+                          <circle cx={cx} cy={cy} r={4.5} fill="#22D3EE" stroke="#FFFFFF" strokeWidth={1} />
+                        </g>
+                      );
+                    }
+                    return null;
+                  }}
+                  activeDot={{ r: 6, fill: '#22D3EE', strokeWidth: 1.5, stroke: '#ffffff' }}
                 />
                 <Line 
                   type="monotone" 
                   dataKey="oxygen" 
-                  stroke="var(--accent-blue)" 
-                  strokeWidth={2} 
-                  dot={{ r: 3.5, fill: 'var(--accent-blue)', strokeWidth: 0 }} 
+                  stroke="#2F80FF" 
+                  strokeWidth={2.5} 
+                  dot={{ r: 3, fill: '#2F80FF', strokeWidth: 0 }} 
                   connectNulls 
-                  activeDot={{ r: 5.5 }}
+                  activeDot={{ r: 5 }}
                 />
               </LineChart>
             )}
@@ -974,8 +1029,7 @@ export default function App() {
           <div className="prediction-summary-mini-card">
             <span className="prediction-mini-title">Model Confidence</span>
             <div className="prediction-mini-value-group">
-              <span className="prediction-mini-value">96</span>
-              <span className="prediction-mini-unit">%</span>
+              <span className="prediction-mini-value" style={{ fontSize: '1.25rem' }}>High (96%)</span>
             </div>
           </div>
         </div>
